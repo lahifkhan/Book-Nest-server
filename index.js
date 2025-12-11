@@ -3,7 +3,7 @@ const cors = require("cors");
 const app = express();
 const port = process.env.PORT || 3000;
 require("dotenv").config();
-const { MongoClient, ServerApiVersion } = require("mongodb");
+const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 
 // middle ware
 app.use(express.json());
@@ -111,6 +111,24 @@ async function run() {
         res.status(500).send({ message: "Failed to update profile", error });
       }
     });
+
+    // update user role
+    app.patch(
+      "/users/:id/role",
+
+      async (req, res) => {
+        const id = req.params.id;
+        const roleInfo = req.body;
+        const query = { _id: new ObjectId(id) };
+        const updatedDoc = {
+          $set: {
+            role: roleInfo.role,
+          },
+        };
+        const result = await userCollection.updateOne(query, updatedDoc);
+        res.send(result);
+      }
+    );
 
     // book related api
     app.post("/books", async (req, res) => {
