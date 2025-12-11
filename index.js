@@ -71,6 +71,47 @@ async function run() {
       res.send(result);
     });
 
+    // get user role
+    app.get("/users/:email/role", async (req, res) => {
+      const email = req.params.email;
+      const query = { email };
+      const user = await userCollection.findOne(query);
+      res.send({ role: user?.role || "user" });
+    });
+
+    app.get("/users/:email", async (req, res) => {
+      const email = req.params.email;
+      const query = { email };
+      const user = await userCollection.findOne(query);
+      res.send(user);
+    });
+
+    // Update user profile by email
+    app.patch("/users/profile/:email", async (req, res) => {
+      try {
+        const email = req.params.email;
+        const { displayName, photoURL } = req.body;
+        console.log(displayName, photoURL);
+
+        const updatedDoc = {
+          $set: {},
+        };
+        if (displayName) updatedDoc.$set.displayName = displayName;
+        if (photoURL) updatedDoc.$set.photoURL = photoURL;
+        console.log(updatedDoc);
+
+        const result = await userCollection.updateOne(
+          { email: email },
+          updatedDoc
+        );
+
+        res.send(result);
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Failed to update profile", error });
+      }
+    });
+
     // book related api
     app.post("/books", async (req, res) => {
       const bookData = req.body;
