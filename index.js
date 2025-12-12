@@ -137,6 +137,60 @@ async function run() {
       res.send(result);
     });
 
+    // get particular book infomation
+    app.get("/book/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await booksCollection.findOne(query);
+      res.send(result);
+    });
+
+    // update particular book
+    app.patch("/update-book/:id", async (req, res) => {
+      const id = req.params.id;
+      const updatedBook = req.body;
+
+      const query = { _id: new ObjectId(id) };
+      const updatedDoc = {
+        $set: {
+          bookName: updatedBook.bookName,
+          bookAuthor: updatedBook.bookAuthor,
+          price: updatedBook.price,
+          description: updatedBook.description,
+          bookImage: updatedBook.bookImage,
+        },
+      };
+
+      const result = await booksCollection.updateOne(query, updatedDoc);
+      res.send(result);
+    });
+
+    app.get("/books", async (req, res) => {
+      const result = await booksCollection.find().toArray();
+      res.send(result);
+    });
+    app.get("/my-books/:email", async (req, res) => {
+      const email = req.params.email;
+      console.log(email);
+      const query = { librarian: email };
+      const result = await booksCollection.find(query).toArray();
+      res.send(result);
+    });
+
+    // update book status
+
+    app.patch("/update-book-status/:id", async (req, res) => {
+      const id = req.params.id;
+      const { status } = req.body;
+
+      const result = await booksCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: { status: status } }
+      );
+
+      res.send(result);
+    });
+
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
