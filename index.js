@@ -165,10 +165,26 @@ async function run() {
       res.send(result);
     });
 
+    // all books using search sort
     app.get("/books", async (req, res) => {
-      const result = await booksCollection.find().toArray();
-      res.send(result);
+      const { status, search, sort } = req.query;
+
+      let query = {};
+      if (status) query.status = status;
+
+      if (search) {
+        query.bookName = { $regex: search, $options: "i" };
+      }
+
+      let sortQuery = {};
+      if (sort === "asc") sortQuery.price = 1;
+      if (sort === "desc") sortQuery.price = -1;
+
+      const books = await booksCollection.find(query).sort(sortQuery).toArray();
+
+      res.send(books);
     });
+
     app.get("/my-books/:email", async (req, res) => {
       const email = req.params.email;
       console.log(email);
