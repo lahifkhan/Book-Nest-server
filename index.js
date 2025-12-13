@@ -4,6 +4,7 @@ const app = express();
 const port = process.env.PORT || 3000;
 require("dotenv").config();
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
+const stripe = require("stripe")(process.env.STRIPE_SECRET);
 
 // middle ware
 app.use(express.json());
@@ -31,6 +32,8 @@ async function run() {
     const db = client.db("book_nest_db");
     const booksCollection = db.collection("books");
     const userCollection = db.collection("users");
+    const ordersCollection = db.collection("orders");
+    const paymentCollection = db.collection("payments");
 
     // user releted api
 
@@ -205,6 +208,129 @@ async function run() {
       );
 
       res.send(result);
+    });
+
+    // order related api
+    app.post("/orders", async (req, res) => {
+      const order = req.body;
+      const result = await ordersCollection.insertOne(order);
+      res.send(result);
+    });
+
+    app.get("/orders/:email", async (req, res) => {
+      const email = req.params.email;
+      const query = { customerEmail: email };
+      const result = await ordersCollection.find(query).toArray();
+      res.send(result);
+    });
+
+    app.patch("/orders/cancel/:id", async (req, res) => {
+      const id = req.params.id;
+
+      const result = await ordersCollection.updateOne(
+        { _id: new ObjectId(id) },
+        {
+          $set: {
+            orderStatus: "cancelled",
+          },
+        }
+      );
+
+      res.send(result);
+    });
+
+    // create checkout session
+    app.post("/payment-checkout-session", async (req, res) => {
+      const paymentInfo = req.body;
+      const amount = parseInt(paymentInfo.price) * 100;
+      const session = await stripe.checkout.sessions.create({
+        line_items: [
+          {
+            price_data: {
+              currency: "usd",
+              unit_amount: amount,
+              product_data: {
+                name: `Please pay for: ${paymentInfo.bookName}`,
+              },
+            },
+            quantity: 1,
+          },
+        ],
+        mode: "payment",
+        metadata: {
+          orderId: paymentInfo.orderId,
+          bookId: paymentInfo.bookId,
+          bookName: paymentInfo.bookName,
+          librarianEmail: paymentInfo.librarianEmail,
+        },
+        customer_email: paymentInfo.customerEmail,
+        success_url: `${process.env.SITE_DOMAIN}/dashboard/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${process.env.SITE_DOMAIN}/dashboard/payment-cancelled`,
+      });
+      res.send({ url: session.url });
+    });
+
+    // // payemtnt succces
+    app.patch("/payment-success", async (req, res) => {
+      try {
+        const sessionId = req.query.session_id;
+
+        const session = await stripe.checkout.sessions.retrieve(sessionId);
+        console.log(session);
+
+        if (session.payment_status !== "paid") {
+          return res.status(400).send({ success: false });
+        }
+
+        const transactionId = session.payment_intent;
+        const orderId = session.metadata.orderId;
+
+        const existingPayment = await paymentCollection.findOne({
+          transactionId,
+        });
+
+        if (existingPayment) {
+          return res.send({
+            message: "Payment already recorded",
+            transactionId,
+          });
+        }
+
+        await ordersCollection.updateOne(
+          { _id: new ObjectId(orderId) },
+          {
+            $set: {
+              paymentStatus: "paid",
+              orderStatus: "pending",
+              transactionId,
+            },
+          }
+        );
+
+        const payment = {
+          orderId: new ObjectId(orderId),
+          bookId: session.metadata.bookId,
+          bookName: session.metadata.bookName,
+          librarianEmail: session.metadata.librarianEmail,
+          customerEmail: session.customer_email,
+          amount: session.amount_total / 100,
+          currency: session.currency,
+          transactionId,
+          paymentStatus: session.payment_status,
+          paidAt: new Date(),
+        };
+
+        const result = await paymentCollection.insertOne(payment);
+
+        res.send({
+          success: true,
+          transactionId,
+          paymentId: result.insertedId,
+        });
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ error: "Payment success handling failed" });
+      }
     });
 
     // Send a ping to confirm a successful connection
