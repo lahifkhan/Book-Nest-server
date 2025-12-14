@@ -34,6 +34,7 @@ async function run() {
     const userCollection = db.collection("users");
     const ordersCollection = db.collection("orders");
     const paymentCollection = db.collection("payments");
+    const wishlistsCollection = db.collection("wishlists");
 
     // user releted api
 
@@ -451,6 +452,80 @@ async function run() {
       const query = { customerEmail: email };
       const result = await paymentCollection.find(query).toArray();
       res.send(result);
+    });
+
+    //  -----------------------wish list ------
+
+    // wishlist store in database
+    app.post("/wishlist", async (req, res) => {
+      try {
+        const { userEmail, bookId, bookName, bookImage, price } = req.body;
+
+        if (!userEmail || !bookId) {
+          return res.status(400).send({ error: "Missing required fields" });
+        }
+
+        // check if already exists
+        const existing = await wishlistsCollection.findOne({
+          userEmail,
+          bookId,
+        });
+
+        if (existing) {
+          return res.status(400).send({ error: "Book already in wishlist" });
+        }
+
+        const result = await wishlistsCollection.insertOne({
+          userEmail,
+          bookId,
+          bookName,
+          bookImage,
+          price,
+          addedAt: new Date(),
+        });
+
+        res.send({ success: true, result });
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ error: "Failed to add to wishlist" });
+      }
+    });
+
+    // user wishlist get
+    app.get("/wishlist/:userEmail", async (req, res) => {
+      try {
+        const userEmail = req.params.userEmail;
+        const wishlist = await wishlistsCollection
+          .find({ userEmail })
+          .sort({ addedAt: -1 })
+          .toArray();
+
+        res.send(wishlist);
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ error: "Failed to fetch wishlist" });
+      }
+    });
+
+    //  delet fro wishlist
+    app.delete("/wishlist/:userEmail/:bookId", async (req, res) => {
+      try {
+        const { userEmail, bookId } = req.params;
+
+        const result = await wishlistsCollection.deleteOne({
+          userEmail,
+          bookId,
+        });
+
+        if (result.deletedCount === 0) {
+          return res.status(404).send({ error: "Book not found in wishlist" });
+        }
+
+        res.send({ success: true, result });
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ error: "Failed to remove from wishlist" });
+      }
     });
 
     // Send a ping to confirm a successful connection
