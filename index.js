@@ -237,6 +237,17 @@ async function run() {
       res.send(books);
     });
 
+    // get latest books
+    app.get("/books/latest", async (req, res) => {
+      const result = await booksCollection
+        .find({ status: "published" })
+        .sort({ createdAt: -1 })
+        .limit(4)
+        .toArray();
+
+      res.send(result);
+    });
+
     app.get("/my-books/:email", async (req, res) => {
       const email = req.params.email;
       console.log(email);
