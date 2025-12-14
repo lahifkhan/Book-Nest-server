@@ -333,6 +333,14 @@ async function run() {
       }
     });
 
+    // for invoices
+    app.get("/payments/:email", async (req, res) => {
+      const email = req.params.email;
+      const query = { customerEmail: email };
+      const result = await paymentCollection.find(query).toArray();
+      res.send(result);
+    });
+
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
