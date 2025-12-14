@@ -132,6 +132,55 @@ async function run() {
         res.send(result);
       }
     );
+    // admin update book status
+    app.patch("/admin/books/status/:id", async (req, res) => {
+      const id = req.params.id;
+      const { status } = req.body;
+
+      const result = await booksCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: { status: status } }
+      );
+
+      res.send(result);
+    });
+
+    // delete book by admin (also delete related orders)
+    app.delete("/admin/books/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+
+        //  Check book exists
+        const book = await booksCollection.findOne({
+          _id: new ObjectId(id),
+        });
+
+        if (!book) {
+          return res.status(404).send({ error: "Book not found" });
+        }
+
+        //  Delete all orders of this book
+        const orderDeleteResult = await ordersCollection.deleteMany({
+          bookId: id,
+        });
+
+        const bookDeleteResult = await booksCollection.deleteOne({
+          _id: new ObjectId(id),
+        });
+
+        res.send({
+          success: true,
+          message: "Book and related orders deleted successfully",
+          deletedBook: bookDeleteResult.deletedCount,
+          deletedOrders: orderDeleteResult.deletedCount,
+        });
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({
+          error: "Failed to delete book",
+        });
+      }
+    });
 
     // book related api
     app.post("/books", async (req, res) => {
@@ -217,6 +266,7 @@ async function run() {
       res.send(result);
     });
 
+    // usr order
     app.get("/orders/:email", async (req, res) => {
       const email = req.params.email;
       const query = { customerEmail: email };
@@ -224,6 +274,7 @@ async function run() {
       res.send(result);
     });
 
+    // order cancel by user
     app.patch("/orders/cancel/:id", async (req, res) => {
       const id = req.params.id;
 
@@ -237,6 +288,56 @@ async function run() {
       );
 
       res.send(result);
+    });
+
+    // librian order
+    app.get("/librarian/orders/:email", async (req, res) => {
+      const email = req.params.email;
+      const query = { librarianEmail: email };
+      const result = await ordersCollection.find(query).toArray();
+      res.send(result);
+    });
+
+    // librian update status
+    app.patch("/librian/update-status/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const { status } = req.body;
+
+        // allowed transitions
+        const allowedStatus = ["pending", "shipped", "delivered", "cancelled"];
+
+        if (!allowedStatus.includes(status)) {
+          return res.status(400).send({ error: "Invalid status" });
+        }
+
+        const order = await ordersCollection.findOne({
+          _id: new ObjectId(id),
+        });
+
+        if (!order) {
+          return res.status(404).send({ error: "Order not found" });
+        }
+
+        //  once cancelled or delivered, cannot change
+        if (
+          order.orderStatus === "cancelled" ||
+          order.orderStatus === "delivered"
+        ) {
+          return res.status(400).send({
+            error: "This order status can no longer be changed",
+          });
+        }
+
+        const result = await ordersCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { orderStatus: status } }
+        );
+
+        res.send({ success: true, result });
+      } catch (error) {
+        res.status(500).send({ error: "Status update failed" });
+      }
     });
 
     // create checkout session
