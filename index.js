@@ -528,6 +528,60 @@ async function run() {
       }
     });
 
+    // book stats
+    app.get("/books-stats", async (req, res) => {
+      try {
+        const totalBooks = await booksCollection.countDocuments();
+
+        const publishedBooks = await booksCollection.countDocuments({
+          status: "published",
+        });
+
+        const unpublishedBooks = await booksCollection.countDocuments({
+          status: "unpublished",
+        });
+
+        res.send([
+          { name: "Total Books", count: totalBooks },
+          { name: "Published", count: publishedBooks },
+          { name: "Unpublished", count: unpublishedBooks },
+        ]);
+      } catch (error) {
+        res.status(500).send({ error: "Failed to fetch book stats" });
+      }
+    });
+
+    // order stats
+    app.get("/order-status-stats", async (req, res) => {
+      try {
+        const pending = await ordersCollection.countDocuments({
+          orderStatus: "pending",
+        });
+
+        const shipped = await ordersCollection.countDocuments({
+          orderStatus: "shipped",
+        });
+
+        const delivered = await ordersCollection.countDocuments({
+          orderStatus: "delivered",
+        });
+
+        const cancelled = await ordersCollection.countDocuments({
+          orderStatus: "cancelled",
+        });
+
+        res.send([
+          { status: "pending", count: pending },
+          { status: "shipped", count: shipped },
+          { status: "delivered", count: delivered },
+          { status: "cancelled", count: cancelled },
+        ]);
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ error: "Failed to fetch order status stats" });
+      }
+    });
+
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
