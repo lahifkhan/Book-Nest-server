@@ -582,6 +582,49 @@ async function run() {
       }
     });
 
+    // review by user after order
+
+    app.post("/books/:id/review", async (req, res) => {
+      try {
+        const bookId = req.params.id;
+        const { userEmail, name, rating, message, avatar } = req.body;
+
+        // check if user ordered this book
+        const ordered = await ordersCollection.findOne({
+          bookId,
+          customerEmail: userEmail,
+          orderStatus: { $ne: "cancelled" },
+        });
+
+        if (!ordered) {
+          return res
+            .status(403)
+            .send({ error: "You must order this book to review" });
+        }
+
+        const review = {
+          userEmail,
+          name,
+          rating: Number(rating),
+          message,
+          avatar,
+          date: new Date(),
+        };
+
+        const result = await booksCollection.updateOne(
+          { _id: new ObjectId(bookId) },
+          {
+            $push: { reviews: review },
+            $inc: { reviewCount: 1 },
+          }
+        );
+
+        res.send({ success: true, result });
+      } catch (error) {
+        res.status(500).send({ error: "Failed to add review" });
+      }
+    });
+
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
