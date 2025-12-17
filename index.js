@@ -1,5 +1,6 @@
 const express = require("express");
 const cors = require("cors");
+var admin = require("firebase-admin");
 const app = express();
 const port = process.env.PORT || 3000;
 require("dotenv").config();
@@ -12,6 +13,33 @@ app.use(cors());
 app.get("/", (req, res) => {
   res.send("Hello from book Nest!");
 });
+
+// service account key set up
+const decoded = Buffer.from(process.env.FB_SERVICE_KEY, "base64").toString(
+  "utf8"
+);
+const serviceAccount = JSON.parse(decoded);
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
+
+// verfify user
+const verifyFBToken = async (req, res, next) => {
+  const token = req.headers.authorization;
+  if (!token) {
+    return res.status(401).send({ message: "unauthorized access" });
+  }
+  try {
+    const idToken = token.split(" ")[1];
+    const decoded = await admin.auth().verifyIdToken(idToken);
+    console.log("decoded in the token", decoded);
+    req.decoded_email = decoded.email;
+    next();
+  } catch (err) {
+    return res.status(401).send({ message: "unauthorized access" });
+  }
+};
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.xyz4gji.mongodb.net/?appName=Cluster0`;
 
@@ -27,7 +55,7 @@ const client = new MongoClient(uri, {
 async function run() {
   try {
     // Connect the client to the server	(optional starting in v4.7)
-    await client.connect();
+    // await client.connect();
 
     const db = client.db("book_nest_db");
     const booksCollection = db.collection("books");
@@ -36,9 +64,30 @@ async function run() {
     const paymentCollection = db.collection("payments");
     const wishlistsCollection = db.collection("wishlists");
 
-    // user releted api
+    // middle ware for admin verify
+    const verifyAdmin = async (req, res, next) => {
+      const email = req.decoded_email;
+      const query = { email };
+      const user = await userCollection.findOne(query);
+      if (!user || user.role !== "admin") {
+        return res.status(403).send({ message: "forbidden access" });
+      }
+      next();
+    };
 
-    app.get("/users", async (req, res) => {
+    // middle ware for librian
+    const verifyLibrian = async (req, res, next) => {
+      const email = req.decoded_email;
+      const query = { email };
+      const user = await userCollection.findOne(query);
+      if (!user || user.role !== "librarian") {
+        return res.status(403).send({ message: "forbidden access" });
+      }
+      next();
+    };
+
+    // user releted api
+    app.get("/users", verifyFBToken, verifyAdmin, async (req, res) => {
       const searchText = req.query.searchText;
       const query = {};
 
@@ -119,6 +168,8 @@ async function run() {
     // update user role
     app.patch(
       "/users/:id/role",
+      verifyFBToken,
+      verifyAdmin,
 
       async (req, res) => {
         const id = req.params.id;
@@ -134,89 +185,106 @@ async function run() {
       }
     );
     // admin update book status
-    app.patch("/admin/books/status/:id", async (req, res) => {
-      const id = req.params.id;
-      const { status } = req.body;
+    app.patch(
+      "/admin/books/status/:id",
+      verifyFBToken,
+      verifyAdmin,
+      async (req, res) => {
+        const id = req.params.id;
+        const { status } = req.body;
 
-      const result = await booksCollection.updateOne(
-        { _id: new ObjectId(id) },
-        { $set: { status: status } }
-      );
+        const result = await booksCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { status: status } }
+        );
 
-      res.send(result);
-    });
+        res.send(result);
+      }
+    );
 
     // delete book by admin (also delete related orders)
-    app.delete("/admin/books/:id", async (req, res) => {
-      try {
-        const id = req.params.id;
+    app.delete(
+      "/admin/books/:id",
+      verifyFBToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const id = req.params.id;
 
-        //  Check book exists
-        const book = await booksCollection.findOne({
-          _id: new ObjectId(id),
-        });
+          //  Check book exists
+          const book = await booksCollection.findOne({
+            _id: new ObjectId(id),
+          });
 
-        if (!book) {
-          return res.status(404).send({ error: "Book not found" });
+          if (!book) {
+            return res.status(404).send({ error: "Book not found" });
+          }
+
+          //  Delete all orders of this book
+          const orderDeleteResult = await ordersCollection.deleteMany({
+            bookId: id,
+          });
+
+          const bookDeleteResult = await booksCollection.deleteOne({
+            _id: new ObjectId(id),
+          });
+
+          res.send({
+            success: true,
+            message: "Book and related orders deleted successfully",
+            deletedBook: bookDeleteResult.deletedCount,
+            deletedOrders: orderDeleteResult.deletedCount,
+          });
+        } catch (error) {
+          console.error(error);
+          res.status(500).send({
+            error: "Failed to delete book",
+          });
         }
-
-        //  Delete all orders of this book
-        const orderDeleteResult = await ordersCollection.deleteMany({
-          bookId: id,
-        });
-
-        const bookDeleteResult = await booksCollection.deleteOne({
-          _id: new ObjectId(id),
-        });
-
-        res.send({
-          success: true,
-          message: "Book and related orders deleted successfully",
-          deletedBook: bookDeleteResult.deletedCount,
-          deletedOrders: orderDeleteResult.deletedCount,
-        });
-      } catch (error) {
-        console.error(error);
-        res.status(500).send({
-          error: "Failed to delete book",
-        });
       }
-    });
+    );
 
-    // book related api
-    app.post("/books", async (req, res) => {
+    // book related api add book by librian
+    app.post("/books", verifyFBToken, verifyLibrian, async (req, res) => {
       const bookData = req.body;
+      bookData.createdAt = new Date();
+
       const result = await booksCollection.insertOne(bookData);
       res.send(result);
     });
 
     // get particular book infomation
-    app.get("/book/:id", async (req, res) => {
+    app.get("/book/:id", verifyFBToken, async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
       const result = await booksCollection.findOne(query);
       res.send(result);
     });
 
-    // update particular book
-    app.patch("/update-book/:id", async (req, res) => {
-      const id = req.params.id;
-      const updatedBook = req.body;
+    // update particular book by librian
+    app.patch(
+      "/update-book/:id",
+      verifyFBToken,
+      verifyLibrian,
+      async (req, res) => {
+        const id = req.params.id;
+        const updatedBook = req.body;
 
-      const query = { _id: new ObjectId(id) };
-      const updatedDoc = {
-        $set: {
-          bookName: updatedBook.bookName,
-          bookAuthor: updatedBook.bookAuthor,
-          price: updatedBook.price,
-          description: updatedBook.description,
-          bookImage: updatedBook.bookImage,
-        },
-      };
+        const query = { _id: new ObjectId(id) };
+        const updatedDoc = {
+          $set: {
+            bookName: updatedBook.bookName,
+            bookAuthor: updatedBook.bookAuthor,
+            price: updatedBook.price,
+            description: updatedBook.description,
+            bookImage: updatedBook.bookImage,
+          },
+        };
 
-      const result = await booksCollection.updateOne(query, updatedDoc);
-      res.send(result);
-    });
+        const result = await booksCollection.updateOne(query, updatedDoc);
+        res.send(result);
+      }
+    );
 
     // all books using search sort
     app.get("/books", async (req, res) => {
@@ -249,37 +317,48 @@ async function run() {
       res.send(result);
     });
 
-    app.get("/my-books/:email", async (req, res) => {
-      const email = req.params.email;
-      console.log(email);
-      const query = { librarian: email };
-      const result = await booksCollection.find(query).toArray();
-      res.send(result);
-    });
+    // get my book librian
+    app.get(
+      "/my-books/:email",
+      verifyFBToken,
+      verifyLibrian,
+      async (req, res) => {
+        const email = req.params.email;
+        console.log(email);
+        const query = { librarian: email };
+        const result = await booksCollection.find(query).toArray();
+        res.send(result);
+      }
+    );
 
-    // update book status
+    // update book status librian
+    app.patch(
+      "/update-book-status/:id",
+      verifyFBToken,
+      verifyLibrian,
+      async (req, res) => {
+        const id = req.params.id;
+        const { status } = req.body;
 
-    app.patch("/update-book-status/:id", async (req, res) => {
-      const id = req.params.id;
-      const { status } = req.body;
+        const result = await booksCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { status: status } }
+        );
 
-      const result = await booksCollection.updateOne(
-        { _id: new ObjectId(id) },
-        { $set: { status: status } }
-      );
-
-      res.send(result);
-    });
+        res.send(result);
+      }
+    );
 
     // order related api
-    app.post("/orders", async (req, res) => {
+    // order post by user
+    app.post("/orders", verifyFBToken, async (req, res) => {
       const order = req.body;
       const result = await ordersCollection.insertOne(order);
       res.send(result);
     });
 
     // usr order
-    app.get("/orders/:email", async (req, res) => {
+    app.get("/orders/:email", verifyFBToken, async (req, res) => {
       const email = req.params.email;
       const query = { customerEmail: email };
       const result = await ordersCollection.find(query).toArray();
@@ -287,7 +366,7 @@ async function run() {
     });
 
     // order cancel by user
-    app.patch("/orders/cancel/:id", async (req, res) => {
+    app.patch("/orders/cancel/:id", verifyFBToken, async (req, res) => {
       const id = req.params.id;
 
       const result = await ordersCollection.updateOne(
@@ -303,54 +382,69 @@ async function run() {
     });
 
     // librian order
-    app.get("/librarian/orders/:email", async (req, res) => {
-      const email = req.params.email;
-      const query = { librarianEmail: email };
-      const result = await ordersCollection.find(query).toArray();
-      res.send(result);
-    });
-
-    // librian update status
-    app.patch("/librian/update-status/:id", async (req, res) => {
-      try {
-        const id = req.params.id;
-        const { status } = req.body;
-
-        // allowed transitions
-        const allowedStatus = ["pending", "shipped", "delivered", "cancelled"];
-
-        if (!allowedStatus.includes(status)) {
-          return res.status(400).send({ error: "Invalid status" });
-        }
-
-        const order = await ordersCollection.findOne({
-          _id: new ObjectId(id),
-        });
-
-        if (!order) {
-          return res.status(404).send({ error: "Order not found" });
-        }
-
-        //  once cancelled or delivered, cannot change
-        if (
-          order.orderStatus === "cancelled" ||
-          order.orderStatus === "delivered"
-        ) {
-          return res.status(400).send({
-            error: "This order status can no longer be changed",
-          });
-        }
-
-        const result = await ordersCollection.updateOne(
-          { _id: new ObjectId(id) },
-          { $set: { orderStatus: status } }
-        );
-
-        res.send({ success: true, result });
-      } catch (error) {
-        res.status(500).send({ error: "Status update failed" });
+    app.get(
+      "/librarian/orders/:email",
+      verifyFBToken,
+      verifyLibrian,
+      async (req, res) => {
+        const email = req.params.email;
+        const query = { librarianEmail: email };
+        const result = await ordersCollection.find(query).toArray();
+        res.send(result);
       }
-    });
+    );
+
+    // librian update order status
+    app.patch(
+      "/librian/update-status/:id",
+      verifyFBToken,
+      verifyLibrian,
+      async (req, res) => {
+        try {
+          const id = req.params.id;
+          const { status } = req.body;
+
+          // allowed transitions
+          const allowedStatus = [
+            "pending",
+            "shipped",
+            "delivered",
+            "cancelled",
+          ];
+
+          if (!allowedStatus.includes(status)) {
+            return res.status(400).send({ error: "Invalid status" });
+          }
+
+          const order = await ordersCollection.findOne({
+            _id: new ObjectId(id),
+          });
+
+          if (!order) {
+            return res.status(404).send({ error: "Order not found" });
+          }
+
+          //  once cancelled or delivered, cannot change
+          if (
+            order.orderStatus === "cancelled" ||
+            order.orderStatus === "delivered"
+          ) {
+            return res.status(400).send({
+              error: "This order status can no longer be changed",
+            });
+          }
+
+          const result = await ordersCollection.updateOne(
+            { _id: new ObjectId(id) },
+            { $set: { orderStatus: status } }
+          );
+
+          res.send({ success: true, result });
+        } catch (error) {
+          res.status(500).send({ error: "Status update failed" });
+        }
+      }
+    );
 
     // create checkout session
     app.post("/payment-checkout-session", async (req, res) => {
@@ -447,7 +541,7 @@ async function run() {
     });
 
     // for invoices
-    app.get("/payments/:email", async (req, res) => {
+    app.get("/payments/:email", verifyFBToken, async (req, res) => {
       const email = req.params.email;
       const query = { customerEmail: email };
       const result = await paymentCollection.find(query).toArray();
@@ -457,7 +551,7 @@ async function run() {
     //  -----------------------wish list ------
 
     // wishlist store in database
-    app.post("/wishlist", async (req, res) => {
+    app.post("/wishlist", verifyFBToken, async (req, res) => {
       try {
         const { userEmail, bookId, bookName, bookImage, price } = req.body;
 
@@ -492,7 +586,7 @@ async function run() {
     });
 
     // user wishlist get
-    app.get("/wishlist/:userEmail", async (req, res) => {
+    app.get("/wishlist/:userEmail", verifyFBToken, async (req, res) => {
       try {
         const userEmail = req.params.userEmail;
         const wishlist = await wishlistsCollection
@@ -508,25 +602,31 @@ async function run() {
     });
 
     //  delet fro wishlist
-    app.delete("/wishlist/:userEmail/:bookId", async (req, res) => {
-      try {
-        const { userEmail, bookId } = req.params;
+    app.delete(
+      "/wishlist/:userEmail/:bookId",
+      verifyFBToken,
+      async (req, res) => {
+        try {
+          const { userEmail, bookId } = req.params;
 
-        const result = await wishlistsCollection.deleteOne({
-          userEmail,
-          bookId,
-        });
+          const result = await wishlistsCollection.deleteOne({
+            userEmail,
+            bookId,
+          });
 
-        if (result.deletedCount === 0) {
-          return res.status(404).send({ error: "Book not found in wishlist" });
+          if (result.deletedCount === 0) {
+            return res
+              .status(404)
+              .send({ error: "Book not found in wishlist" });
+          }
+
+          res.send({ success: true, result });
+        } catch (error) {
+          console.error(error);
+          res.status(500).send({ error: "Failed to remove from wishlist" });
         }
-
-        res.send({ success: true, result });
-      } catch (error) {
-        console.error(error);
-        res.status(500).send({ error: "Failed to remove from wishlist" });
       }
-    });
+    );
 
     // book stats
     app.get("/books-stats", async (req, res) => {
@@ -551,8 +651,8 @@ async function run() {
       }
     });
 
-    // order stats
-    app.get("/order-status-stats", async (req, res) => {
+    // order statistics
+    app.get("/order-status-stats", verifyFBToken, async (req, res) => {
       try {
         const pending = await ordersCollection.countDocuments({
           orderStatus: "pending",
@@ -584,7 +684,7 @@ async function run() {
 
     // review by user after order
 
-    app.post("/books/:id/review", async (req, res) => {
+    app.post("/books/:id/review", verifyFBToken, async (req, res) => {
       try {
         const bookId = req.params.id;
         const { userEmail, name, rating, message, avatar } = req.body;
@@ -625,11 +725,11 @@ async function run() {
       }
     });
 
-    // Send a ping to confirm a successful connection
-    await client.db("admin").command({ ping: 1 });
-    console.log(
-      "Pinged your deployment. You successfully connected to MongoDB!"
-    );
+    // // Send a ping to confirm a successful connection
+    // await client.db("admin").command({ ping: 1 });
+    // console.log(
+    //   "Pinged your deployment. You successfully connected to MongoDB!"
+    // );
   } finally {
     // Ensures that the client will close when you finish/error
     // await client.close();
